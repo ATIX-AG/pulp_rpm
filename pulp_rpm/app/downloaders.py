@@ -3,6 +3,7 @@ import os
 from logging import getLogger
 from urllib.parse import quote, unquote, urlparse
 
+import aiohttp
 from aiohttp_xmlrpc.client import ServerProxy, _Method
 from lxml import etree
 
@@ -152,6 +153,28 @@ class UlnDownloader(RpmDownloader):
         self.session_key = None
 
         super().__init__(*args, **kwargs)
+
+    def get_http_giveup_handler(self):
+        state = {"403_count": 0}
+
+        def uln_givup_handler(exc):
+            if isinstance(exc, aiohttp.ClientResponseError):
+                if exc.code == 403:
+                    state["403_count"] += 1
+                    log.info("403 attempt #%s", state["403_count"])
+                    if state["403_count"] >= 5:
+                        state["403_count"] = 0
+                        log.info("ULN: Gave up after 5 consecutive 403 responses.")
+                        return True
+                    else:
+                        return False
+                # For other response codes, follow the normal logic:
+                server_error = 500 <= exc.code < 600
+                too_many_requests = exc.code == 429
+                return not server_error and not too_many_requests
+            return False
+
+        return uln_givup_handler
 
     async def _run(self, extra_data=None):
         """
